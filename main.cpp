@@ -212,27 +212,27 @@ public:
         {
             //Walk recursively for every file
             //but exclude dirs nad check for level
-            rwalk(  d, exclude_dirs, level, 
-                    [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
+            rwalk(d, exclude_dirs, level,
+                [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
+                {
+                    //check file size
+                    if (f_size < min_file_size)
                     {
-                        //check file size
-                        if (f_size < min_file_size)                        
-                        {
-                            m_log_inst << " skiped by size" << "\t\t";
-                        }//check mask
-                        else if (!apply_mask(f_path.filename().string(), file_mask))                        
-                        {
-                            m_log_inst << " skiped by mask" << "\t\t";
-                        }
-                        else                        
-                        {
-                            m_log_inst << " add to list" << "\t\t";
-                            scoped_files[f_size].push_back(f_path.string());
-                        }
-
-                        m_log_inst  << " [" << f_size << "bytes]\t" << f_path << "\r\n";
+                        m_log_inst << " skiped by size" << "\t\t";
+                    }//check mask
+                    else if (!apply_mask(f_path.filename().string(), file_mask))
+                    {
+                        m_log_inst << " skiped by mask" << "\t\t";
                     }
-                );
+                    else
+                    {
+                        m_log_inst << " add to list" << "\t\t";
+                        scoped_files[f_size].push_back(f_path.string());
+                    }
+
+                    m_log_inst << " [" << f_size << "bytes]\t" << f_path << "\r\n";
+                }
+            );
         }
 
         return scoped_files;
@@ -255,40 +255,48 @@ public:
         m_log_inst << "================================================" << "\r\n";
         m_log_inst << "walk (" << dir << ")" << "\r\n";
 
-        for (const auto& d_it : filesystem::directory_iterator{ dir })
+        try 
         {
-            if (filesystem::is_regular_file(d_it.status()))
+            for (const auto& d_it : filesystem::directory_iterator{ dir })
             {
-                size_t f_size = filesystem::file_size(d_it);
-                string f_path = d_it.path().string();
-
-                //Call predicat if we have
-                if (file_predicat)
-                    file_predicat(f_size, d_it.path());
-            }
-            else if (filesystem::is_directory(d_it.status()))
-            {
-                bool skip = false;
-
-                //check exclude dir
-                for (auto exclude_d : exclude_dirs)
+                if (filesystem::is_regular_file(d_it.status()))
                 {
-                    if (exclude_d == d_it.path().filename())
-                    {
-                        m_log_inst << "================================================" << "\r\n";
-                        m_log_inst << "skip (" << d_it.path().string() << ")\r\n";
-                        skip = true;
-                        break;
-                    }
+                    size_t f_size = filesystem::file_size(d_it);
+                    string f_path = d_it.path().string();
+
+                    //Call predicat if we have
+                    if (file_predicat)
+                        file_predicat(f_size, d_it.path());
                 }
+                else if (filesystem::is_directory(d_it.status()))
+                {
+                    bool skip = false;
 
-                //Skip this folder - go to the next
-                if (skip)
-                    continue;
+                    //check exclude dir
+                    for (auto exclude_d : exclude_dirs)
+                    {
+                        if (exclude_d == d_it.path().filename())
+                        {
+                            m_log_inst << "================================================" << "\r\n";
+                            m_log_inst << "skip (" << d_it.path().string() << ")\r\n";
+                            skip = true;
+                            break;
+                        }
+                    }
 
-                //We need to go deeper©
-                rwalk(d_it.path().string(), exclude_dirs, level, file_predicat);
+                    //Skip this folder - go to the next
+                    if (skip)
+                        continue;
+
+                    //We need to go deeper©
+                    rwalk(d_it.path().string(), exclude_dirs, level, file_predicat);
+                }
             }
+        }
+        catch (const std::exception& e)
+        {
+            m_log_inst << e.what() << "\r\n";
+            return false;
         }
 
         return true;
