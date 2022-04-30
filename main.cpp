@@ -4,233 +4,374 @@
 #include <boost/crc.hpp>
 #include <boost/regex/v5/regex.hpp>
 #include <boost/regex/v5/regex_match.hpp>
+#include <fstream>
 #include <filesystem>
 #include <list>
 #include <map>
+#include <array>
 
 #include "version.h"
 
 namespace po = boost::program_options;
 using namespace std;
 
-enum class walker_hash_e { crc32, md5 };
-
-struct walker_hash
+class logger
 {
-    map<string, walker_hash_e> m_hash_map =    {    {"crc32", walker_hash_e::crc32},
-                                                    {"md5", walker_hash_e::md5} };
-    void calculate(walker_hash_e hash_type) 
+    bool m_enabled = false;
+
+public:
+    logger(bool enabled) : m_enabled(enabled) {};
+
+    logger& operator<<(const auto& data)
     {
-        //switch(hash_type)
+        if (m_enabled)
+            cout << data;
+
+        return *this;
+    }
+};
+
+class walker_hash
+{
+
+protected:
+    vector<char> m_hash = { 0 };
+
+public:
+    virtual vector<char> calculate(const char* buffer, size_t buffer_size) = 0;
+};
+
+class md5_walker_hash : public walker_hash
+{
+
+public:
+    md5_walker_hash() { m_hash.reserve(16); }
+
+    vector<char> calculate(const char* buffer, size_t buffer_size) override
+    {
+        //TODO
+        m_hash.clear();
+        for (size_t i = 0; i < buffer_size; i++)
+        {
+            m_hash.push_back(buffer[i]);
+        }
+
+        return m_hash;
+    }
+};
+
+class crc32_walker_hash : public walker_hash
+{
+
+public:
+    crc32_walker_hash() { m_hash.reserve(4); }
+
+    vector<char> calculate(const char* buffer, size_t buffer_size) override
+    {
+        //TODO
+        m_hash.clear();
+        for (size_t i = 0; i < buffer_size; i++)
+        {
+            m_hash.push_back(buffer[i]);
+        }
+
+        return m_hash;
+    }
+};
+
+struct walker_file
+{
+    string m_file_name;
+    ifstream m_ifs;
+    size_t m_block_size;
+public:
+    walker_file(const string& f_name, const size_t block_size) : m_file_name(f_name), m_block_size(block_size)
+    {
+        m_ifs.open(f_name, m_ifs.binary);
     };
-
-    //operator ==
-    //operator!=
-};
-
-struct walker_options
-{    
-
-    list<filesystem::path> m_dirs;
-    list<filesystem::path> m_exclude_dirs;
-    walker_hash_e m_hash_alg;
-    const size_t m_level;
-    const string& m_file_mask;
-    const size_t m_min_file_size;
-    const size_t m_block_size;
-
-    bool m_mask_start_with = false;
-    bool m_mask_end_with = false;
-    vector<string> m_mask_vector;
-
-    walker_options() = delete;
-
-    walker_options( const vector<string>& dirs,
-                    const vector<string>& exclude_dirs,
-                    const size_t level,
-                    const string& hash_alg,
-                    const string& file_mask,
-                    const size_t min_file_size,
-                    const size_t block_size) :
-                    m_level{ level },
-                    m_hash_alg{ walker_hash_e::crc32 },
-                    m_file_mask{ file_mask },
-                    m_min_file_size{ min_file_size },
-                    m_block_size{ block_size }
+    
+    walker_file(const walker_file& other)
     {
-        for (auto d : dirs)
-        {
-            filesystem::path p = filesystem::path(d);
-            if (filesystem::is_directory(p))
-                m_dirs.push_back(p);
-        }
-
-        for (auto d : exclude_dirs)
-        {
-            filesystem::path p = filesystem::path(d);
-            if (filesystem::is_directory(p))
-                m_exclude_dirs.push_back(p);
-        }
-
-        walker_hash wh;
-        if(wh.m_hash_map.contains(hash_alg))
-            m_hash_alg = wh.m_hash_map[hash_alg];
-
-        m_mask_vector = split(m_file_mask, '*');
-        if (m_file_mask[0] == '*')
-            m_mask_start_with = true;
-        if (m_file_mask[m_file_mask.length() - 1] == '*')
-            m_mask_end_with = true;
+        m_block_size = other.m_block_size;
+        m_file_name = other.m_file_name;
+        m_ifs.open(m_file_name, m_ifs.binary);
     }
 
-    // ("",  '.') -> [""]
-    // ("11", '.') -> ["11"]
-    // ("..", '.') -> ["", "", ""]
-    // ("11.", '.') -> ["11", ""]
-    // (".11", '.') -> ["", "11"]
-    // ("11.22", '.') -> ["11", "22"]
-    vector<std::string> split(const string& str, char d)
+    ~walker_file()
     {
-        vector<std::string> r;
-
-        string::size_type start = 0;
-        string::size_type stop = str.find_first_of(d);
-        while (stop != string::npos)
+        m_ifs.close();
+    }
+    //compare???
+    /*
+    vector<char> calculate_hash(shared_ptr<walker_hash> hash_alg, size_t block_num)
+    {
+        if (!m_block)
         {
-            string sub = str.substr(start, stop - start);
-            if(sub != "")
-                r.push_back(sub);
+            m_block = new char[m_block_size];
 
-            start = stop + 1;
-            stop = str.find_first_of(d, start);
+            if (!m_block)
+                return vector<char>();
+
+            m_ifs.open(m_file_name, fstream::binary);
         }
 
-        string sub = str.substr(start);
+        memset(m_block, 0x0, m_block_size);
+        m_ifs.seekg(block_num * m_block_size, m_ifs.beg);
+        m_ifs.read(m_block, m_block_size);
 
-        if (sub != "")
-            r.push_back(sub);
-
-        return r;
+        return
+            hash_alg->calculate(m_block, m_block_size);
     }
+    */
 };
-
 
 class johnny_walker
 {
-    const walker_options& m_options;
-    map<size_t, list<string>> m_scan_files;
+    logger m_log_inst = { true };
 
-    bool apply_mask(const string& file_name)
+    //map<size_t, list<string>> m_scoped_files;
+    
+    size_t m_level = 0;
+
+    bool apply_mask(const string& file_name, const string& file_mask)
     {
-        size_t start = 0;
-        size_t counter = 0;
+        auto file_it = file_name.cbegin();
+        auto file_temp_it = file_name.cbegin();
 
-        if (m_options.m_mask_vector.size() == 0)
-            return true;
+        auto mask_it = file_mask.cbegin();
+        auto mask_temp_it = file_mask.cbegin();
 
-
-        //check file mask
-        for (auto sub_mask : m_options.m_mask_vector)
+        while (1)
         {
-            size_t offset = file_name.find(sub_mask, start);
+            //We at the and of mask
+            if (mask_it == file_mask.cend())
+            {
+                //File name end too?
+                if (file_temp_it == file_name.cend())
+                    return true;
+                else
+                    return false;//Nope - we have some more symbols
+            }
 
-            if (offset == string::npos)
+            if (*mask_it == '*')
+            {
+                mask_it++;
+                //* - last mask character
+                if (mask_it == file_mask.cend())
+                    return true;
+
+                mask_temp_it = mask_it;
+            }
+
+            if (file_temp_it == file_name.cend())
                 return false;
 
-            //mask not start with * - file_name must conatin sub_mask at start
-            if (!m_options.m_mask_start_with && counter == 0)
+            if (*mask_it == *file_temp_it || *mask_it == '?')
             {
-                if (offset != start)
-                    return false;
+                mask_it++;
+                file_temp_it++;
             }
             else
             {
-                if (offset == start)
+                //First iteration failed - skip
+                if (mask_it == file_mask.cbegin())
                     return false;
-            }
 
-            if (counter == m_options.m_mask_vector.size() - 1)
-            {
-                //mask end with * - after last symbol must be another symbols
-                if (m_options.m_mask_end_with)
-                {
-                    if (offset + sub_mask.length() == file_name.length())
-                        return false;
-                    else
-                        return true;
-                }
-                else
-                {
-                    if (offset + sub_mask.length() != file_name.length())
-                        return false;
-                    else
-                        return true;
-                }
+                file_it++;
+                file_temp_it = file_it;
+                mask_it = mask_temp_it;
             }
-
-            start = offset + sub_mask.length();
-            counter++;
         }
 
-        return true;
+        return false;
     }
 
 public:
-    johnny_walker(const walker_options& options) : m_options{ options } {};
+    johnny_walker() {};
     ~johnny_walker() {};
 
-    void walk(const filesystem::path& p)
+    map<size_t, list<string>> get_scoped_files( const vector<string>& dirs,
+                                                const vector<string>& exclude_dirs,
+                                                const size_t level,
+                                                const string& file_mask,
+                                                const size_t min_file_size)
     {
-        cout << "walk (" << p.filename() << ")" << endl;
+        map<size_t, list<string>> scoped_files;
 
-        for (const auto& d_it : filesystem::directory_iterator{ p })
+        //const string& file_mask,
+        //const size_t min_file_size
+
+        for (const auto& d : dirs)
+        {
+            //Walk recursively for every file
+            //but exclude dirs nad check for level
+            rwalk(  d, exclude_dirs, level, 
+                    //Search predicat
+                    [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
+                    {
+                        //check file size
+                        if (f_size < min_file_size)                        
+                        {
+                            m_log_inst << " skiped by size" << "\t\t";
+                        }//check mask
+                        else if (!apply_mask(f_path.filename().string(), file_mask))                        
+                        {
+                            m_log_inst << " skiped by mask" << "\t\t";
+                        }
+                        else                        
+                        {
+                            m_log_inst << " add to list" << "\t\t";
+                            scoped_files[f_size].push_back(f_path.string());
+                        }
+
+                        m_log_inst  << " [" << f_size << "bytes]\t" << f_path << "\r\n";
+
+                        return false; 
+                    }
+                );
+        }
+
+        return scoped_files;
+    }
+
+    bool rwalk( const string& dir,
+                const vector<string>& exclude_dirs,
+                const size_t level,
+                const function<void(size_t, const filesystem::path&)>& skip_predicat = nullptr)
+    {
+        if (level)
+        {
+            m_level++;
+
+            //check level
+            if (m_level > level)
+                return false;
+        }
+
+        m_log_inst << "================================================" << "\r\n";
+        m_log_inst << "walk (" << dir << ")" << "\r\n";
+
+        for (const auto& d_it : filesystem::directory_iterator{ dir })
         {
             if (filesystem::is_regular_file(d_it.status()))
             {
                 size_t f_size = filesystem::file_size(d_it);
                 string f_path = d_it.path().string();
 
-                cout << "  " << f_path << " [" << f_size << " bytes] ";
-
-                if (!apply_mask(d_it.path().filename().string()))
-                {
-                    cout << " skiped by mask" << endl;
-                    continue;
-                }
+                //Call predicat if we have
+                if (skip_predicat)
+                    skip_predicat(f_size, d_it.path());
                 
-                /*
-                boost::basic_regex my_filter(".*");
-                boost::smatch what;
-
-                // Skip if no match for V2:
-                if (!boost::regex_match(e.path().string(), my_filter))
-                {
-                    cout << "skiped by mask" << endl;
-                    continue;
-                }
-                */
-                // For V3:
-                //if( !boost::regex_match( i->path().filename().string(), what, my_filter ) ) continue;
-                
-                //check file size
-                if (f_size < m_options.m_min_file_size)
-                {
-                    cout << " skiped by size" << endl;
-                    continue;
-                }
-                cout << " add to list" << endl;
-                m_scan_files[f_size].push_back(f_path);
+                //m_scoped_files[f_size].push_back(f_path);
             }
             else if (filesystem::is_directory(d_it.status()))
             {
+                bool skip = false;
+
                 //check exclude dir
-                walk(d_it.path());
+                for (auto exclude_d : exclude_dirs)
+                {
+                    if (exclude_d == d_it.path().filename())
+                    {
+                        m_log_inst << "================================================" << "\r\n";
+                        m_log_inst << "skip (" << d_it.path().string() << ")\r\n";
+                        skip = true;
+                        break;
+                    }
+                }
+
+                //Skip this folder - go to the next
+                if (skip)
+                    continue;
+
+                //We need to go deeper©
+                rwalk(d_it.path().string(), exclude_dirs, level, skip_predicat);
             }
         }
+
+        return true;
     }
+
+    void rget_duplicates(   const list<shared_ptr<walker_file>>& wlkr_file_list,
+                            list<list<string>>& root,
+                            shared_ptr<walker_hash> hash_alg,
+                            char* tmp_buf)
+    {
+        map<vector<char>, list<shared_ptr<walker_file>>> wlkr_file_map;
+
+        //Calculate hash for current block for every file
+        for (auto wlkr_file : wlkr_file_list)
+        {
+            if (wlkr_file->m_ifs.eof())
+                return;
+
+            wlkr_file->m_ifs.read(tmp_buf, wlkr_file->m_block_size);
+            wlkr_file->m_ifs.seekg(wlkr_file->m_block_size);//Seek to next block
+            vector<char> cur_hash = hash_alg->calculate(tmp_buf, wlkr_file->m_block_size);
+            memset(tmp_buf, 0x0, wlkr_file->m_block_size);
+
+            wlkr_file_map[cur_hash].push_back(wlkr_file);
+        }
+
+        //Go deeper
+        for (auto wlkr_file : wlkr_file_map)
+        {
+            vector<char> cur_hash;
+            list<shared_ptr<walker_file>> next_wlkr_file_list;
+
+            tie(cur_hash, next_wlkr_file_list) = wlkr_file;
+
+            //Start calculate hash for next block
+            if(next_wlkr_file_list.size() != 1)
+                rget_duplicates(next_wlkr_file_list, root, hash_alg, tmp_buf);
+        }
+    }
+
+    list<list<string>> get_duplicates(  const map<size_t, list<string>>& scoped_files,
+                                        shared_ptr<walker_hash> hash_alg,
+                                        const size_t block_size)
+    {
+        list<list<string>> result = { list<string>{""} };
+
+        char* tmp_buf = new char[block_size];
+        memset(tmp_buf, 0x0, block_size);
+
+        for (auto files : scoped_files)
+        {
+            size_t file_size;
+            list<string> file_list;
+            tie(file_size, file_list) = files;
+
+            //And what we must do with that???
+            if (file_size == 0)
+                continue;
+
+            //File with size (file_size) one in list
+            //Files with defferent size are defferent
+            //Captian Obvious
+            if (file_list.size() == 1)
+                continue;
+
+            list<shared_ptr<walker_file>> wlkr_file_list;
+
+            for (auto file_name_it : file_list)
+            {
+                walker_file wlkr_file(file_name_it, block_size);
+
+                wlkr_file_list.push_back(make_shared<walker_file>(wlkr_file));
+            }
+
+            rget_duplicates(wlkr_file_list, result, hash_alg, tmp_buf);
+        }
+
+        delete[] tmp_buf;
+
+        return result;
+    }
+
 };
 
-void set_scan_dir(const vector<string>& dirs) 
+void set_scan_dir(const vector<string>& dirs)
 {
     for (auto d : dirs)
     {
@@ -242,24 +383,14 @@ void set_scan_dir(const vector<string>& dirs)
         }
     }
 }
-
-void set_hash(string hash)
-{
-    
-    walker_hash wh;
-    //check - if hash in list
-    if (!wh.m_hash_map.contains(hash))
-    {
-        string err = "Unknown hash alg " + hash;
-        throw runtime_error::exception(err.c_str());
-    }
-}
-
 int main(int argc, const char* argv[])
 {
+    map<string, shared_ptr<walker_hash>> hash_map = {   {"crc32", make_shared<crc32_walker_hash>()},
+                                                        {"md5", make_shared<md5_walker_hash>()} };
+
     po::variables_map vm;
 
-    try 
+    try
     {
         po::options_description desc{ "Options" };
         desc.add_options()
@@ -267,7 +398,7 @@ int main(int argc, const char* argv[])
             ("scan_dir,d", po::value<vector<string>>()->notifier(set_scan_dir), "scan directory list")
             ("exclude_dir,e", po::value<vector<string>>()->default_value(vector<string>(), ""), "exclude directory list")
             ("scan_lvl,l", po::value<size_t>()->default_value(0), "scan level")
-            ("hash,a", po::value<string>()->default_value("crc32")->notifier(set_hash), "hash algorithm [crc32, md5]")
+            ("hash,a", po::value<string>()->default_value("crc32"), "hash algorithm [crc32, md5]")
             ("mask,m", po::value<string>()->default_value("*"), "file mask")
             ("file_size,s", po::value<size_t>()->default_value(1), "minimal file size")
             ("block_size,b", po::value<size_t>()->default_value(1000), "read block size");
@@ -277,55 +408,61 @@ int main(int argc, const char* argv[])
 
         if (vm.count("help"))
         {
-            cout << desc << std::endl;
+            cout << desc << "\r\n";;
             return 0;
         }
 
         if (vm.count("scan_dir"))
         {
             for (auto d : vm["scan_dir"].as<vector<string>>())
-                cout << d << endl;
+                cout << "scan_dir " << d << "\r\n";
         }
         else
         {
             string err = "Scan dir empty";
             throw runtime_error::exception(err.c_str());
         }
-            
+
+        if (!hash_map.contains(vm["hash"].as<string>()))
+        {
+            string err = "Unknown hash alg " + vm["hash"].as<string>();
+            throw runtime_error::exception(err.c_str());
+        }
+
         if (vm.count("exclude_dir"))
             for (auto e : vm["exclude_dir"].as<vector<string>>())
-                cout << e << endl;
+                cout << "exclude_dir " << e << "\r\n";
         if (vm.count("level"))
-            cout << "level: " << vm["scan_lvl"].as<size_t>() << std::endl;
+            cout << "level: " << vm["scan_lvl"].as<size_t>() << "\r\n";
         if (vm.count("hash"))
-            cout << "hash: " << vm["hash"].as<string>() << std::endl;
+            cout << "hash: " << vm["hash"].as<string>() << "\r\n";
         if (vm.count("mask"))
-            cout << "mask: " << vm["mask"].as<string>() << std::endl;
+            cout << "mask: " << vm["mask"].as<string>() << "\r\n";
         if (vm.count("file_size"))
-            cout << "file_size: " << vm["file_size"].as<size_t>() << std::endl;
+            cout << "file_size: " << vm["file_size"].as<size_t>() << "\r\n";
         if (vm.count("block_size"))
-            cout << "block_size: " << vm["block_size"].as<size_t>() << std::endl;
+            cout << "block_size: " << vm["block_size"].as<size_t>() << "\r\n";
     }
-    catch (const std::exception& e) 
+    catch (const std::exception& e)
     {
         std::cerr << e.what() << std::endl;
     }
 
-    walker_options opt( vm["scan_dir"].as<vector<string>>(),
-                        vm["exclude_dir"].as<vector<string>>(),
-                        vm["scan_lvl"].as<size_t>(),
-                        vm["hash"].as<string>(),
-                        vm["mask"].as<string>(),
-                        vm["file_size"].as<size_t>(),
-                        vm["block_size"].as<size_t>()
-                        );
+    johnny_walker wlkr;
+    
+    //Get scoped files for directory
+    map<size_t, list<string>> scoped_files = wlkr.get_scoped_files( vm["scan_dir"].as<vector<string>>(),
+                                                                    vm["exclude_dir"].as<vector<string>>(), 
+                                                                    vm["scan_lvl"].as<size_t>(), 
+                                                                    vm["mask"].as<string>(), 
+                                                                    vm["file_size"].as<size_t>());
 
-    johnny_walker wlkr(opt);
+    auto wlkr_hash_alg = hash_map[vm["hash"].as<string>()];
 
-    for (const auto& d : vm["scan_dir"].as<vector<string>>())
-    {
-        wlkr.walk(d);
-    }
+    //Get duplicate list
+    list<list<string>> diplicate_vector = wlkr.get_duplicates(  scoped_files,
+                                                                wlkr_hash_alg,
+                                                                vm["block_size"].as<size_t>());
 
-	return 0;
+    return 0;
 }
