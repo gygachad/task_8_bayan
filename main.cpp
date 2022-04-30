@@ -322,7 +322,8 @@ public:
             if (wlkr_file->m_ifs.eof())
                 return;
                 */
-            if (wlkr_file->m_ifs.tellg() == wlkr_file->m_file_size)
+            streamoff sp = wlkr_file->m_ifs.tellg();
+            if (sp == wlkr_file->m_file_size || sp == -1)//-1 - error?
             {
                 duplicate.push_back(wlkr_file->m_file_name);
                 file_end = true;
@@ -413,6 +414,7 @@ void set_scan_dir(const vector<string>& dirs)
         }
     }
 }
+
 int main(int argc, const char* argv[])
 {
     map<string, shared_ptr<walker_hash>> hash_map = {   {"crc32", make_shared<crc32_walker_hash>()},
