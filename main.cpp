@@ -1,18 +1,4 @@
-#include <iostream>
-#include <boost/program_options.hpp>
-#include <boost/uuid/detail/md5.hpp>
-#include <boost/crc.hpp>
-#include <boost/regex/v5/regex.hpp>
-#include <boost/regex/v5/regex_match.hpp>
-#include <fstream>
-#include <filesystem>
-#include <list>
-#include <map>
-#include <array>
-
-#include <Windows.h>
-
-#include "version.h"
+#include "stdafx.h"
 
 namespace po = boost::program_options;
 using namespace std;
@@ -33,83 +19,6 @@ public:
             cout << data;
 
         return *this;
-    }
-};
-
-class walker_hash
-{
-protected:
-    vector<char> m_hash = { 0 };
-
-public:
-    virtual vector<char> calculate(const char* buffer, size_t buffer_size) = 0;
-};
-
-class md5_walker_hash : public walker_hash
-{
-
-public:
-    md5_walker_hash() { m_hash.reserve(16); }
-
-    vector<char> calculate(const char* buffer, size_t buffer_size) override
-    {
-        //TODO
-        m_hash.clear();
-        for (size_t i = 0; i < buffer_size; i++)
-        {
-            m_hash.push_back(buffer[i]);
-        }
-
-        return m_hash;
-    }
-};
-
-class crc32_walker_hash : public walker_hash
-{
-    uint32_t m_table[256];
-
-    void generate_table()
-    {
-        uint32_t polynomial = 0xEDB88320;
-        for (uint32_t i = 0; i < 256; i++)
-        {
-            uint32_t c = i;
-            for (size_t j = 0; j < 8; j++)
-            {
-                if (c & 1) {
-                    c = polynomial ^ (c >> 1);
-                }
-                else {
-                    c >>= 1;
-                }
-            }
-            m_table[i] = c;
-        }
-    }
-
-public:
-    crc32_walker_hash()
-    {
-        generate_table();
-        m_hash.reserve(4);
-    }
-
-    vector<char> calculate(const char* buffer, size_t buffer_size) override
-    {
-        uint32_t c = 0;
-
-        const char* u = buffer;
-        for (size_t i = 0; i < buffer_size; ++i)
-            c = m_table[(c ^ u[i]) & 0xFF] ^ (c >> 8);
-
-        m_hash.clear();
-
-        m_hash.push_back((c >> 24) & 0xFF);
-        m_hash.push_back((c >> 16) & 0xFF);
-        m_hash.push_back((c >> 8) & 0xFF);
-        m_hash.push_back((c) & 0xFF);
-
-        return m_hash;
     }
 };
 
@@ -341,7 +250,7 @@ class johnny_walker
                     if (skip)
                         continue;
 
-                    //We need to go deeper©
+                    //We need to go deeperï¿½
                     rwalk(d_it.path().string(), exclude_dirs, level, file_predicat);
                 }
             }

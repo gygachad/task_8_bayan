@@ -16,7 +16,7 @@ find_package(Boost COMPONENTS program_options REQUIRED)
 
 include_directories(${Boost_INCLUDE_DIR})
 
-add_executable(bayan main.cpp version.cpp)
+add_executable(bayan main.cpp walker_hash.cpp md5.cpp version.cpp)
 
 set_target_properties(bayan PROPERTIES
     CXX_STANDARD 20
