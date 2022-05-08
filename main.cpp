@@ -10,6 +10,8 @@
 #include <map>
 #include <array>
 
+#include <Windows.h>
+
 #include "version.h"
 
 namespace po = boost::program_options;
@@ -20,7 +22,10 @@ class logger
     bool m_enabled = false;
 
 public:
-    logger(bool enabled) : m_enabled(enabled) {};
+    logger() {};
+
+    void enable() { m_enabled = true; };
+    void disable() { m_enabled = false; };
 
     logger& operator<<(const auto& data)
     {
@@ -33,7 +38,6 @@ public:
 
 class walker_hash
 {
-
 protected:
     vector<char> m_hash = { 0 };
 
@@ -62,18 +66,48 @@ public:
 
 class crc32_walker_hash : public walker_hash
 {
+    uint32_t m_table[256];
+
+    void generate_table()
+    {
+        uint32_t polynomial = 0xEDB88320;
+        for (uint32_t i = 0; i < 256; i++)
+        {
+            uint32_t c = i;
+            for (size_t j = 0; j < 8; j++)
+            {
+                if (c & 1) {
+                    c = polynomial ^ (c >> 1);
+                }
+                else {
+                    c >>= 1;
+                }
+            }
+            m_table[i] = c;
+        }
+    }
 
 public:
-    crc32_walker_hash() { m_hash.reserve(4); }
+    crc32_walker_hash()
+    {
+        generate_table();
+        m_hash.reserve(4);
+    }
 
     vector<char> calculate(const char* buffer, size_t buffer_size) override
     {
-        //TODO
+        uint32_t c = 0;
+
+        const char* u = buffer;
+        for (size_t i = 0; i < buffer_size; ++i)
+            c = m_table[(c ^ u[i]) & 0xFF] ^ (c >> 8);
+
         m_hash.clear();
-        for (size_t i = 0; i < buffer_size; i++)
-        {
-            m_hash.push_back(buffer[i]);
-        }
+
+        m_hash.push_back((c >> 24) & 0xFF);
+        m_hash.push_back((c >> 16) & 0xFF);
+        m_hash.push_back((c >> 8) & 0xFF);
+        m_hash.push_back((c) & 0xFF);
 
         return m_hash;
     }
@@ -81,63 +115,125 @@ public:
 
 struct walker_file
 {
-    streamoff m_file_size = 0;
-    string m_file_name;
-    ifstream m_ifs;
-    size_t m_block_size;
-    
-public:
-    walker_file(const string& f_name, const size_t block_size) : m_file_name(f_name), m_block_size(block_size)
+    streamoff   m_file_size;
+    size_t      m_file_size_in_block;
+    string      m_file_name;
+    ifstream    m_ifs;
+    size_t      m_block_size;
+
+    shared_ptr<walker_hash>     m_hash_alg;
+    map<size_t, vector<char>>   m_hash_map;
+
+    walker_file(const string& f_name,
+        const size_t block_size,
+        shared_ptr<walker_hash> hash_alg) : m_file_name(f_name), m_block_size(block_size), m_hash_alg(hash_alg)
     {
+        //Check - if file opened
         m_ifs.open(f_name, m_ifs.binary);
+
         //Get file size
         m_ifs.seekg(0, m_ifs.end);
         m_file_size = m_ifs.tellg();
         m_ifs.seekg(0, m_ifs.beg);
+        m_ifs.close();
+
+        m_file_size_in_block = m_file_size / m_block_size;
+        //If file size is not a multiple of block size - add 1
+        m_file_size_in_block += m_file_size % m_block_size == 0 ? 0 : 1;
     };
-    
-    walker_file(const walker_file& other)
+
+    walker_file(walker_file& other)
     {
+        m_hash_alg = other.m_hash_alg;
         m_block_size = other.m_block_size;
         m_file_name = other.m_file_name;
         m_file_size = other.m_file_size;
-        m_ifs.open(m_file_name, m_ifs.binary);
+        m_file_size_in_block = other.m_file_size_in_block;
+    }
+
+    walker_file(walker_file&& other) noexcept
+    {
+        m_hash_alg = other.m_hash_alg;
+        m_block_size = other.m_block_size;
+        m_file_name = other.m_file_name;
+        m_file_size = other.m_file_size;
+        m_file_size_in_block = other.m_file_size_in_block;
     }
 
     ~walker_file()
     {
-        m_ifs.close();
+        if (m_ifs.is_open())
+            m_ifs.close();
     }
-    //compare???
-    /*
-    vector<char> calculate_hash(shared_ptr<walker_hash> hash_alg, size_t block_num)
+
+    friend bool operator==(walker_file& lhs, walker_file& rhs)
     {
-        if (!m_block)
+        if (lhs.m_file_size_in_block != rhs.m_file_size_in_block)
+            return false;
+
+        if (lhs.m_file_size == -1 || rhs.m_file_size == -1)
+            return false;
+
+        if (!lhs.m_ifs.is_open())
         {
-            m_block = new char[m_block_size];
+            lhs.m_ifs.open(lhs.m_file_name, lhs.m_ifs.binary);
 
-            if (!m_block)
-                return vector<char>();
-
-            m_ifs.open(m_file_name, fstream::binary);
+            if (!lhs.m_ifs.is_open())
+                return false;
         }
 
-        memset(m_block, 0x0, m_block_size);
-        m_ifs.seekg(block_num * m_block_size, m_ifs.beg);
-        m_ifs.read(m_block, m_block_size);
+        if (!rhs.m_ifs.is_open())
+        {
+            rhs.m_ifs.open(rhs.m_file_name, rhs.m_ifs.binary);
 
-        return
-            hash_alg->calculate(m_block, m_block_size);
+            if (!lhs.m_ifs.is_open())
+                return false;
+        }
+
+        char* tmp_buf = new char[lhs.m_block_size];
+
+        bool status = true;
+
+        for (size_t i = 0; i < lhs.m_file_size_in_block; i++)
+        {
+            if (!lhs.m_hash_map.contains(i))
+            {
+                memset(tmp_buf, 0x0, lhs.m_block_size);
+                lhs.m_ifs.read(tmp_buf, lhs.m_block_size);
+                vector<char> cur_hash = lhs.m_hash_alg->calculate(tmp_buf, lhs.m_block_size);
+                lhs.m_hash_map[i] = cur_hash;
+            }
+
+            if (!rhs.m_hash_map.contains(i))
+            {
+                memset(tmp_buf, 0x0, rhs.m_block_size);
+                rhs.m_ifs.read(tmp_buf, rhs.m_block_size);
+                vector<char> cur_hash = rhs.m_hash_alg->calculate(tmp_buf, rhs.m_block_size);
+                rhs.m_hash_map[i] = cur_hash;
+            }
+
+            if (lhs.m_hash_map[i] != rhs.m_hash_map[i])
+            {
+                status = false;
+                break;
+            }
+        }
+        
+        if (lhs.m_ifs.is_open())
+            lhs.m_ifs.close();
+
+        if (rhs.m_ifs.is_open())
+            rhs.m_ifs.close();
+
+        delete[] tmp_buf;
+        return status;
     }
-    */
 };
 
 class johnny_walker
 {
-    logger m_log_inst = { false };
+    logger m_log_inst;
 
-    //map<size_t, list<string>> m_scoped_files;
-    
     size_t m_level = 0;
 
     bool apply_mask(const string& file_name, const string& file_mask)
@@ -193,55 +289,10 @@ class johnny_walker
         return false;
     }
 
-public:
-    johnny_walker() {};
-    ~johnny_walker() {};
-
-    map<size_t, list<string>> get_scoped_files( const vector<string>& dirs,
-                                                const vector<string>& exclude_dirs,
-                                                const size_t level,
-                                                const string& file_mask,
-                                                const size_t min_file_size)
-    {
-        map<size_t, list<string>> scoped_files;
-
-        //const string& file_mask,
-        //const size_t min_file_size
-
-        for (const auto& d : dirs)
-        {
-            //Walk recursively for every file
-            //but exclude dirs nad check for level
-            rwalk(d, exclude_dirs, level,
-                [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
-                {
-                    //check file size
-                    if (f_size < min_file_size)
-                    {
-                        m_log_inst << " skiped by size" << "\t\t";
-                    }//check mask
-                    else if (!apply_mask(f_path.filename().string(), file_mask))
-                    {
-                        m_log_inst << " skiped by mask" << "\t\t";
-                    }
-                    else
-                    {
-                        m_log_inst << " add to list" << "\t\t";
-                        scoped_files[f_size].push_back(f_path.string());
-                    }
-
-                    m_log_inst << " [" << f_size << "bytes]\t" << f_path << "\r\n";
-                }
-            );
-        }
-
-        return scoped_files;
-    }
-
-    bool rwalk( const string& dir,
-                const vector<string>& exclude_dirs,
-                const size_t level,
-                const function<void(size_t, const filesystem::path&)>& file_predicat = nullptr)
+    bool rwalk(const string& dir,
+        const vector<string>& exclude_dirs,
+        const size_t level,
+        const function<void(size_t, const filesystem::path&)>& file_predicat = nullptr)
     {
         if (level)
         {
@@ -255,9 +306,11 @@ public:
         m_log_inst << "================================================" << "\r\n";
         m_log_inst << "walk (" << dir << ")" << "\r\n";
 
-        try 
+        error_code ec;
+
+        for (const auto& d_it : filesystem::directory_iterator{ dir, ec })
         {
-            for (const auto& d_it : filesystem::directory_iterator{ dir })
+            try
             {
                 if (filesystem::is_regular_file(d_it.status()))
                 {
@@ -292,16 +345,74 @@ public:
                     rwalk(d_it.path().string(), exclude_dirs, level, file_predicat);
                 }
             }
-        }
-        catch (const std::exception& e)
-        {
-            m_log_inst << e.what() << "\r\n";
-            return false;
+            catch (const std::exception& e)
+            {
+                m_log_inst << e.what() << "\r\n";
+                continue;
+            }
         }
 
         return true;
     }
 
+public:
+    johnny_walker() {};
+    ~johnny_walker() {};
+
+    void set_verbose_out(bool verb)
+    {
+        if (verb)
+            m_log_inst.enable();
+        else
+            m_log_inst.disable();
+    };
+
+    using walker_file_map = map<size_t, list<shared_ptr<walker_file>>>;
+
+    walker_file_map get_scoped_files(   const vector<string>& dirs,
+                                        const vector<string>& exclude_dirs,
+                                        const size_t level,
+                                        const string& file_mask,
+                                        const size_t min_file_size,
+                                        shared_ptr<walker_hash> hash_alg,
+                                        const size_t block_size)
+    {
+        walker_file_map scoped_files;
+
+        m_log_inst << "================================================" << "\r\n";
+
+        for (const auto& d : dirs)
+        {
+            //Walk recursively for every file
+            //but exclude dirs nad check for level
+            rwalk(d, exclude_dirs, level,
+                [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
+                {
+                    //check file size
+                    if (f_size < min_file_size)
+                    {
+                        m_log_inst << " skiped by size" << "\t\t";
+                    }//check mask
+                    else if (!apply_mask(f_path.filename().string(), file_mask))
+                    {
+                        m_log_inst << " skiped by mask" << "\t\t";
+                    }
+                    else
+                    {
+                        m_log_inst << " add to list" << "\t\t";
+                        
+                        walker_file wlkr_file(f_path.string(), block_size, hash_alg);
+                        scoped_files[f_size].push_back(make_shared<walker_file>(wlkr_file));
+                    }
+                    m_log_inst << " [" << f_size << "bytes]\t" << f_path << "\r\n";
+                }
+            );
+        }
+
+        return scoped_files;
+    }
+
+    /*
     void rget_duplicates(   const list<shared_ptr<walker_file>>& wlkr_file_list,
                             list<list<string>>& root,
                             shared_ptr<walker_hash> hash_alg,
@@ -318,10 +429,10 @@ public:
             //Check - is opened
             if (!wlkr_file->m_ifs.is_open())
                 continue;
-            /*
-            if (wlkr_file->m_ifs.eof())
-                return;
-                */
+
+            //if (wlkr_file->m_ifs.eof())
+            //    return;
+
             streamoff sp = wlkr_file->m_ifs.tellg();
             if (sp == wlkr_file->m_file_size || sp == -1)//-1 - error?
             {
@@ -357,21 +468,30 @@ public:
                 rget_duplicates(next_wlkr_file_list, root, hash_alg, tmp_buf);
         }
     }
+    */
 
-    list<list<string>> get_duplicates(  const map<size_t, list<string>>& scoped_files,
-                                        shared_ptr<walker_hash> hash_alg,
-                                        const size_t block_size)
+    list<list<string>> get_duplicates(const walker_file_map& scoped_files)
     {
         list<list<string>> result;
 
-        char* tmp_buf = new char[block_size];
-        memset(tmp_buf, 0x0, block_size);
+        //char* tmp_buf = new char[block_size];
+        //memset(tmp_buf, 0x0, block_size);
 
-        for (auto files : scoped_files)
+        size_t scoped_files_count = scoped_files.size();
+        size_t processed_files_count = 0;
+
+        m_log_inst << "================================================\r\n";
+
+        for (auto& files : scoped_files)
         {
+            processed_files_count++;
+
+            m_log_inst << "Processed " << processed_files_count << "\\" << scoped_files_count
+                << " " << processed_files_count * 100 / scoped_files_count << "%" << "\r";
+
             size_t file_size;
-            list<string> file_list;
-            tie(file_size, file_list) = files;
+            list<shared_ptr<walker_file>> wlkr_file_list;
+            tie(file_size, wlkr_file_list) = files;
 
             //And what we must do with that???
             if (file_size == 0)
@@ -380,31 +500,60 @@ public:
             //File with size (file_size) one in list
             //Files with different size are different
             //Captian Obvious
-            if (file_list.size() == 1)
+            if (wlkr_file_list.size() == 1)
                 continue;
 
-            list<shared_ptr<walker_file>> wlkr_file_list;
+            list<shared_ptr<walker_file>> wlk_tmp;
+            list<string> file_name_tmp;
 
-            for (auto file_name_it : file_list)
+            //Search for duplicates
+            while (wlkr_file_list.size() != 0)
             {
-                walker_file wlkr_file(file_name_it, block_size);
+                wlk_tmp.clear();
+                file_name_tmp.clear();
 
-                wlkr_file_list.push_back(make_shared<walker_file>(wlkr_file));
+                auto prev_wlkr_file = wlkr_file_list.cbegin();
+
+                wlk_tmp.push_back(*prev_wlkr_file);
+                file_name_tmp.push_back((*prev_wlkr_file)->m_file_name);
+
+                //Compare every file with each other
+                for (auto wlkr_file = wlkr_file_list.cbegin(); wlkr_file != wlkr_file_list.cend(); wlkr_file++)
+                {
+                    //compare iterator's
+                    if (prev_wlkr_file == wlkr_file)
+                        continue;
+
+                    //compare walker files
+                    //* - iterator
+                    //* - shared_ptr
+                    if (**prev_wlkr_file == **wlkr_file)
+                    {
+                        wlk_tmp.push_back(*wlkr_file);
+                        file_name_tmp.push_back((*wlkr_file)->m_file_name);
+                    }
+                }
+
+                if (file_name_tmp.size() > 1)
+                    result.push_back(file_name_tmp);
+
+                for (auto wlkr_tmp_file : wlk_tmp)
+                    wlkr_file_list.remove(wlkr_tmp_file);
+
             }
-
-            rget_duplicates(wlkr_file_list, result, hash_alg, tmp_buf);
+            //else case
+            //rget_duplicates(wlkr_file_list, result, hash_alg, tmp_buf);
         }
 
-        delete[] tmp_buf;
+        //delete[] tmp_buf;
 
         return result;
     }
-
 };
 
 void set_scan_dir(const vector<string>& dirs)
 {
-    for (auto d : dirs)
+    for (auto& d : dirs)
     {
         filesystem::directory_entry dir = filesystem::directory_entry(d);
         if (!dir.exists())
@@ -417,7 +566,7 @@ void set_scan_dir(const vector<string>& dirs)
 
 int main(int argc, const char* argv[])
 {
-    map<string, shared_ptr<walker_hash>> hash_map = {   {"crc32", make_shared<crc32_walker_hash>()},
+    map<string, shared_ptr<walker_hash>> hash_map = { {"crc32", make_shared<crc32_walker_hash>()},
                                                         {"md5", make_shared<md5_walker_hash>()} };
 
     po::variables_map vm;
@@ -427,6 +576,7 @@ int main(int argc, const char* argv[])
         po::options_description desc{ "Options" };
         desc.add_options()
             ("help,h", "This message")
+            ("verbose,v", "Verbose output")
             ("scan_dir,d", po::value<vector<string>>()->notifier(set_scan_dir), "scan directory list")
             ("exclude_dir,e", po::value<vector<string>>()->default_value(vector<string>(), ""), "exclude directory list")
             ("scan_lvl,l", po::value<size_t>()->default_value(0), "scan level")
@@ -481,28 +631,30 @@ int main(int argc, const char* argv[])
     }
 
     johnny_walker wlkr;
-    
-    //Get scoped files for directory
-    map<size_t, list<string>> scoped_files = wlkr.get_scoped_files( vm["scan_dir"].as<vector<string>>(),
-                                                                    vm["exclude_dir"].as<vector<string>>(), 
-                                                                    vm["scan_lvl"].as<size_t>(), 
-                                                                    vm["mask"].as<string>(), 
-                                                                    vm["file_size"].as<size_t>());
 
-    auto wlkr_hash_alg = hash_map[vm["hash"].as<string>()];
+    if (vm.count("verbose"))
+        wlkr.set_verbose_out(true);
+
+    //Get scoped files for directory
+    //map with walker_files. Key - file size
+    johnny_walker::walker_file_map scoped_files = wlkr.get_scoped_files(vm["scan_dir"].as<vector<string>>(),
+        vm["exclude_dir"].as<vector<string>>(),
+        vm["scan_lvl"].as<size_t>(),
+        vm["mask"].as<string>(),
+        vm["file_size"].as<size_t>(),
+        hash_map[vm["hash"].as<string>()],
+        vm["block_size"].as<size_t>());
 
     //Get duplicate list
-    list<list<string>> diplicate_list = wlkr.get_duplicates(  scoped_files,
-                                                                wlkr_hash_alg,
-                                                                vm["block_size"].as<size_t>());
+    list<list<string>> diplicate_list = wlkr.get_duplicates(scoped_files);
 
     size_t counter = 1;
 
-    for (auto dl : diplicate_list)
+    for (auto& dl : diplicate_list)
     {
-        cout << "=====Duplicate files group " << counter <<  "=====" << endl;
+        cout << "=====Duplicate files group " << counter << "=====" << endl;
 
-        for (auto df : dl)
+        for (auto& df : dl)
         {
             cout << df << endl;
         }
