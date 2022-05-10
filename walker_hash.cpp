@@ -1,5 +1,4 @@
 #include "stdafx.h"
-#include "md5.h"
 
 using namespace std;
 
@@ -10,7 +9,16 @@ vector<char> md5_walker_hash::calculate(const char* buffer, size_t buffer_size)
 {
     m_hash.clear();
 
-    md5(buffer, (uint32_t)buffer_size, m_hash);
+    boost::uuids::detail::md5 hash;
+    boost::uuids::detail::md5::digest_type digest;
+
+    hash.process_bytes(buffer, buffer_size);
+    hash.get_digest(digest);
+
+    const auto charDigest = reinterpret_cast<const char*>(&digest);
+
+    for (size_t i = 0; i < sizeof(digest); i++)
+        m_hash.push_back(charDigest[i]);
 
     return m_hash;
 }
@@ -31,12 +39,10 @@ void crc32_walker_hash::generate_table()
         uint32_t c = i;
         for (size_t j = 0; j < 8; j++)
         {
-            if (c & 1) {
+            if (c & 1) 
                 c = polynomial ^ (c >> 1);
-            }
-            else {
+            else
                 c >>= 1;
-            }
         }
         m_table[i] = c;
     }
