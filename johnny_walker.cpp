@@ -17,7 +17,7 @@ walker_file::walker_file(const string& f_name,
     m_file_size_in_block = m_file_size / m_block_size;
     //If file size is not a multiple of block size - add 1
     m_file_size_in_block += m_file_size % m_block_size == 0 ? 0 : 1;
-};
+}
 
 walker_file::walker_file(walker_file& other)
 {
@@ -227,8 +227,8 @@ bool johnny_walker::rwalk(  const string& dir,
 }
 
 
-johnny_walker::johnny_walker() {};
-johnny_walker::~johnny_walker() {};
+johnny_walker::johnny_walker() {}
+johnny_walker::~johnny_walker() {}
 
 void johnny_walker::set_verbose_out(bool verb)
 {
@@ -236,7 +236,7 @@ void johnny_walker::set_verbose_out(bool verb)
         m_log_inst.enable();
     else
         m_log_inst.disable();
-};
+}
 
 using walker_file_map = map<size_t, list<shared_ptr<walker_file>>>;
 
@@ -257,7 +257,7 @@ walker_file_map johnny_walker::get_scoped_files(const vector<string>& dirs,
         //Walk recursively for every file
         //but exclude dirs nad check for level
         rwalk(d, exclude_dirs, level,
-            [=, &scoped_files](size_t f_size, const filesystem::path& f_path)
+            [=, this, &scoped_files](size_t f_size, const filesystem::path& f_path)
             {
                 //check file size
                 if (f_size < min_file_size)

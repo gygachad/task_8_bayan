@@ -10,8 +10,6 @@
 #include <map>
 #include <array>
 
-#include <Windows.h>
-
 #include "version.h"
 #include "walker_hash.h"
 #include "johnny_walker.h"

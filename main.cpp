@@ -11,7 +11,7 @@ void set_scan_dir(const vector<string>& dirs)
         if (!dir.exists())
         {
             string err = "Directory does not exist: " + d;
-            throw runtime_error::exception(err.c_str());
+            throw runtime_error(err.c_str());
         }
     }
 }
@@ -54,13 +54,13 @@ int main(int argc, const char* argv[])
         else
         {
             string err = "Scan dir empty";
-            throw runtime_error::exception(err.c_str());
+            throw runtime_error(err.c_str());
         }
 
         if (!hash_map.contains(vm["hash"].as<string>()))
         {
             string err = "Unknown hash alg " + vm["hash"].as<string>();
-            throw runtime_error::exception(err.c_str());
+            throw runtime_error(err.c_str());
         }
 
         if (vm.count("exclude_dir"))
